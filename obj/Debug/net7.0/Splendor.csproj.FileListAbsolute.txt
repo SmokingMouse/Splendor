@@ -1,0 +1,15 @@
+D:\代码\Splendor\bin\Debug\net7.0\Splendor.exe
+D:\代码\Splendor\bin\Debug\net7.0\Splendor.deps.json
+D:\代码\Splendor\bin\Debug\net7.0\Splendor.runtimeconfig.json
+D:\代码\Splendor\bin\Debug\net7.0\Splendor.dll
+D:\代码\Splendor\bin\Debug\net7.0\Splendor.pdb
+D:\代码\Splendor\obj\Debug\net7.0\Splendor.csproj.AssemblyReference.cache
+D:\代码\Splendor\obj\Debug\net7.0\Splendor.GeneratedMSBuildEditorConfig.editorconfig
+D:\代码\Splendor\obj\Debug\net7.0\Splendor.AssemblyInfoInputs.cache
+D:\代码\Splendor\obj\Debug\net7.0\Splendor.AssemblyInfo.cs
+D:\代码\Splendor\obj\Debug\net7.0\Splendor.csproj.CoreCompileInputs.cache
+D:\代码\Splendor\obj\Debug\net7.0\Splendor.dll
+D:\代码\Splendor\obj\Debug\net7.0\refint\Splendor.dll
+D:\代码\Splendor\obj\Debug\net7.0\Splendor.pdb
+D:\代码\Splendor\obj\Debug\net7.0\Splendor.genruntimeconfig.cache
+D:\代码\Splendor\obj\Debug\net7.0\ref\Splendor.dll
