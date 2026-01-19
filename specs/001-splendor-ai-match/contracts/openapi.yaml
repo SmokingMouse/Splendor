@@ -1,0 +1,180 @@
+openapi: 3.0.3
+info:
+  title: Splendor 人机对战 API
+  version: 0.1.0
+servers:
+  - url: /api
+paths:
+  /matches:
+    post:
+      summary: 创建对局
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMatchRequest'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Match'
+  /matches/{matchId}:
+    get:
+      summary: 获取对局状态
+      parameters:
+        - $ref: '#/components/parameters/MatchId'
+      responses:
+        '200':
+          description: 当前对局状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatchState'
+        '404':
+          description: 对局不存在
+  /matches/{matchId}/actions:
+    get:
+      summary: 获取可行动作
+      parameters:
+        - $ref: '#/components/parameters/MatchId'
+      responses:
+        '200':
+          description: 可行动作列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionList'
+        '404':
+          description: 对局不存在
+    post:
+      summary: 提交行动
+      parameters:
+        - $ref: '#/components/parameters/MatchId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitActionRequest'
+      responses:
+        '200':
+          description: 行动执行结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResult'
+        '400':
+          description: 行动不可用或非法
+        '404':
+          description: 对局不存在
+  /ai-configs:
+    get:
+      summary: 获取可用 AI 配置
+      responses:
+        '200':
+          description: AI 配置列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AiConfigList'
+components:
+  parameters:
+    MatchId:
+      name: matchId
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    CreateMatchRequest:
+      type: object
+      required:
+        - humanName
+        - aiConfigId
+      properties:
+        humanName:
+          type: string
+          description: 玩家名称
+        aiConfigId:
+          type: string
+          description: AI 配置标识
+    Match:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [created, running, finished]
+    MatchState:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+        currentPlayerId:
+          type: string
+        turn:
+          type: integer
+        boardState:
+          type: object
+        score:
+          type: object
+        winner:
+          type: string
+          nullable: true
+    ActionList:
+      type: object
+      properties:
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Action'
+    Action:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        payload:
+          type: object
+    SubmitActionRequest:
+      type: object
+      required:
+        - actionId
+      properties:
+        actionId:
+          type: string
+        payload:
+          type: object
+    ActionResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        reason:
+          type: string
+          nullable: true
+        state:
+          $ref: '#/components/schemas/MatchState'
+    AiConfigList:
+      type: object
+      properties:
+        configs:
+          type: array
+          items:
+            $ref: '#/components/schemas/AiConfig'
+    AiConfig:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string

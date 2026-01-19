@@ -1,0 +1,8 @@
+{
+  "id": "d28f8e4e-ba1a-4572-bb07-072759ed32b0",
+  "status": "running",
+  "current_player_id": "human:玩家",
+  "turn": 1,
+  "ai_config_id": "default",
+  "winner": null
+}

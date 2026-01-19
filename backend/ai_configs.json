@@ -1,0 +1,10 @@
+{
+  "configs": [
+    {
+      "id": "default",
+      "name": "默认 AI",
+      "description": "随机行动 AI",
+      "path": ""
+    }
+  ]
+}
