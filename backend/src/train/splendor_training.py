@@ -26,8 +26,8 @@ class TrainingConfig:
     selfplay_every: int = 50
     selfplay_games: int = 2
     mcts_sims: int = 25
-    max_turns: int = 120
-    temperature_moves: int = 12
+    max_moves: int = 150
+    temperature_moves: int = 16
     batch_size: int = 32
     lr: float = 1e-3
     weight_decay: float = 1e-4
@@ -102,7 +102,7 @@ def run_training(cfg: TrainingConfig) -> dict:
                 network=network,
                 num_games=cfg.selfplay_games,
                 mcts_iterations=cfg.mcts_sims,
-                max_turns=cfg.max_turns,
+                max_moves=cfg.max_moves,
                 temperature_moves=cfg.temperature_moves,
                 base_seed=selfplay_seed_counter,
                 device=device,
@@ -115,24 +115,30 @@ def run_training(cfg: TrainingConfig) -> dict:
             new_samples = 0
             game_lengths = []
             game_winners_known = 0
+            truncated = 0
             for result in results:
                 game_lengths.append(result.move_count)
                 if result.winner is not None:
                     game_winners_known += 1
+                if result.reached_max_turns:
+                    truncated += 1
                 for sample in result.samples:
                     replay.append((sample.obs, sample.pi, sample.value))
                     new_samples += 1
             selfplay_stats["samples"] += new_samples
 
             avg_len = float(np.mean(game_lengths)) if game_lengths else 0.0
+            truncate_rate = truncated / max(1, len(results))
             writer.add_scalar("selfplay/avg_game_length", avg_len, step)
             writer.add_scalar("selfplay/games_with_winner", game_winners_known, step)
+            writer.add_scalar("selfplay/truncate_rate", truncate_rate, step)
             writer.add_scalar("selfplay/new_samples", new_samples, step)
             writer.add_scalar("selfplay/replay_size", len(replay), step)
             writer.add_scalar("selfplay/wall_seconds_per_batch", sp_seconds, step)
             print(
                 f"[step {step:6d}] self-play {len(results)} games, "
-                f"avg_len={avg_len:.1f}, replay={len(replay)}, took {sp_seconds:.1f}s"
+                f"avg_len={avg_len:.1f}, winner={game_winners_known}/{len(results)}, "
+                f"truncate={truncate_rate:.0%}, replay={len(replay)}, took {sp_seconds:.1f}s"
             )
 
         if len(replay) < cfg.batch_size:
@@ -208,7 +214,7 @@ def _parse_args(argv: list[str] | None = None) -> TrainingConfig:
     parser.add_argument("--selfplay-every", type=int, default=cfg.selfplay_every)
     parser.add_argument("--selfplay-games", type=int, default=cfg.selfplay_games)
     parser.add_argument("--mcts-sims", type=int, default=cfg.mcts_sims)
-    parser.add_argument("--max-turns", type=int, default=cfg.max_turns)
+    parser.add_argument("--max-moves", type=int, default=cfg.max_moves)
     parser.add_argument("--temperature-moves", type=int, default=cfg.temperature_moves)
     parser.add_argument("--batch-size", type=int, default=cfg.batch_size)
     parser.add_argument("--lr", type=float, default=cfg.lr)
@@ -228,7 +234,7 @@ def _parse_args(argv: list[str] | None = None) -> TrainingConfig:
         selfplay_every=args.selfplay_every,
         selfplay_games=args.selfplay_games,
         mcts_sims=args.mcts_sims,
-        max_turns=args.max_turns,
+        max_moves=args.max_moves,
         temperature_moves=args.temperature_moves,
         batch_size=args.batch_size,
         lr=args.lr,

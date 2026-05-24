@@ -67,7 +67,7 @@ def _force_return_gems_heuristic(state: MatchState) -> None:
 def run_selfplay_game(
     network: SplendorPVNet,
     mcts_iterations: int = 50,
-    max_turns: int = 200,
+    max_moves: int = 120,
     temperature_moves: int = 16,
     seed: Optional[int] = None,
     device: str | torch.device = "cpu",
@@ -75,6 +75,7 @@ def run_selfplay_game(
     dirichlet_alpha: float = 0.3,
     dirichlet_epsilon: float = 0.25,
     num_players: int = NUM_PLAYERS,
+    add_dirichlet: bool = True,
 ) -> GameResult:
     rng = np.random.default_rng(seed)
     state = create_selfplay_match(num_players=num_players, prefix=f"sp{seed if seed is not None else 0}")
@@ -90,7 +91,7 @@ def run_selfplay_game(
     trajectory: list[tuple[np.ndarray, np.ndarray, str]] = []
     move_count = 0
 
-    while state.status == "running" and state.turn <= max_turns:
+    while state.status == "running" and move_count < max_moves:
         if state.return_tokens:
             _force_return_gems_heuristic(state)
             if state.status != "running":
@@ -100,7 +101,7 @@ def run_selfplay_game(
         current_player_id = state.current_player_id
         obs = encode_observation(state, current_player_id)
 
-        root, _ = mcts.run(state, iterations=mcts_iterations, add_dirichlet=True)
+        root, _ = mcts.run(state, iterations=mcts_iterations, add_dirichlet=add_dirichlet)
         if not root.children:
             break
 
@@ -118,7 +119,7 @@ def run_selfplay_game(
         apply_and_advance(state, action)
         move_count += 1
 
-    reached_max = state.turn > max_turns and state.status == "running"
+    reached_max = move_count >= max_moves and state.status == "running"
     final_scores = [p.score for p in state.players]
 
     samples: list[SelfPlaySample] = []
@@ -140,7 +141,7 @@ def run_selfplay_batch(
     network: SplendorPVNet,
     num_games: int,
     mcts_iterations: int,
-    max_turns: int,
+    max_moves: int,
     temperature_moves: int,
     base_seed: int,
     device: str | torch.device,
@@ -151,7 +152,7 @@ def run_selfplay_batch(
         result = run_selfplay_game(
             network=network,
             mcts_iterations=mcts_iterations,
-            max_turns=max_turns,
+            max_moves=max_moves,
             temperature_moves=temperature_moves,
             seed=base_seed + game_idx,
             device=device,

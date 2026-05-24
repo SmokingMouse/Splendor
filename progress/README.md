@@ -35,20 +35,26 @@ Windows (WSL2 Ubuntu 22.04 /home/smokingmouse/python/ai/Splendor)
 - [x] 重写 `backend/src/train/splendor_features.py` → AlphaZero obs encoder
 - [x] 写 `backend/src/train/splendor_network.py` → Residual-MLP PV-net, 4 维 value head
 - [x] 写 `backend/src/train/splendor_mcts.py` → Determinized 4 玩家 PUCT MCTS
-- [x] 修 `_create_selfplay_match` 为 4 人 (通过 backend 加 `create_selfplay_match` + `_init_board` 参数化)
+- [x] 修 `_create_selfplay_match` 为 4 人
 - [x] 重写 `splendor_training.py` → self-play → replay → train → checkpoint 循环
 - [x] **Pipeline 端到端 smoke 通**: selfplay 45 moves / 5.7s CPU → train 10 步 → `latest.pt` 写出
-- [ ] **修 max_turns 语义** (当前限制 state.turn 不限制 move,实际 game 比配置长 5-10x)
-- [ ] **缓解 game 不结束** (4 人 random net 倾向无限 reserve;加 max_moves 硬截断 + reward shaping)
-- [ ] **跑稍大 smoke** (100+ train steps, 验证 loss 真下降, tensorboard 看曲线)
+- [x] **修 max_turns 语义** → 改用 `move_count < max_moves`,默认 150
+- [x] **算法验证三道关基础设施**: random/heuristic baseline、evaluate harness、self-improvement curve 工具齐全
+- [x] **CRITICAL bug fix**: `_buy_card_actions` 不检查可付性 → game 静默卡死(legal_actions 回归测试 8/8 通)
+- [x] **Tie-aware ranking value**: 同分玩家拿平均 rank value,消除 player-order noise
+- [x] **Hybrid value scheme**: terminal 用 full ranking, truncated 用 score-based 半幅 → 200 步内首次 NN 拿到 winner
+- [x] **Phase 2 ai_agent 集成**: web UI 玩家可选 "璀璨宝石 AlphaZero" 选项加载本地 checkpoint
+- [x] **200 步 CPU smoke 全链路通**: loss -44%, entropy 4.1→2.0, hybrid 200步 ckpt MCTS@25 推理 5/8 自然结束
 
 ### Mid-term (1-2 周)
 
-- [ ] CLI 训练跑通 smoke 配置: 1k env steps, 50 MCTS sims/move, batch=64
-- [ ] TensorBoard 服务跑在 WSL,Mac `ssh -L 6006:localhost:6006` 浏览器看
-- [ ] 实现 evaluation: checkpoint vs random / heuristic baseline 胜率
-- [ ] AI agent 升级: 读 PyTorch checkpoint + 推理时跑 MCTS (eval temperature=0)
-- [ ] 跑 1-2 天完整 self-play,checkpoint POST /artifacts → web UI 体验
+- [ ] **Windows GPU 长训练**: 1500-3000 steps, mcts_sims=50, batch=64,验证 hybrid value 是否能让 NN 逐步追上 heuristic baseline (目标 ≥ 50% 胜率 vs heuristic)
+- [ ] **TensorBoard 端口转发**: WSL 启 tensorboard,Mac `ssh -L 6006:localhost:6006` 浏览器看曲线
+- [ ] **Self-improvement curve 自动化**: 训练完跑 `scripts/self_improvement_curve.py`,确认 win_rate 跨 N 个 checkpoint 单调上升
+- [x] 实现 evaluation: checkpoint vs random / heuristic baseline 胜率
+- [x] AI agent 升级: 读 PyTorch checkpoint + 推理时跑 MCTS (eval temperature=0)
+- [ ] 跑通后 checkpoint POST /artifacts → web UI 玩家体验
+- [ ] **调优 hybrid value scale**: 当前 ±0.5 cap 是猜测,需对比 [0.3, 0.5, 0.7] 找最优(可能太宽让 NN 不学 close out)
 
 ### Long-term (1+ 月)
 
@@ -60,6 +66,50 @@ Windows (WSL2 Ubuntu 22.04 /home/smokingmouse/python/ai/Splendor)
 - [ ] 把 in-memory training repo 升级为 SQLite (避免重启丢 project/run 元数据)
 
 ## Session Log
+
+### Session 2 (2026-05-25, ~3h)
+
+**Goal**: 算法验证机制 + sparse reward 冷启动突破。
+
+- **Done — 修 max_turns 语义**: `state.turn` → `move_count`,默认 max_moves=150 (heuristic 平均 116 moves 完成,150 留 buffer)
+- **Done — CRITICAL bug**: `_buy_card_actions` 不检查可付性 → MCTS 选 illegal buy → apply_action 静默失败 → seat 不轮换 → self-play 死循环。修了 `_can_afford` mirror。
+- **Done — pytest 回归**: `backend/tests/test_legal_actions.py` 8 个测试,核心 invariant "每个 legal_action 必须 apply_action.success"
+- **Done — 算法验证基础设施**:
+  - `splendor_agents.py`: Agent 抽象 + RandomAgent + HeuristicAgent (greedy buy>reserve>take_3) + MCTSAgent
+  - `splendor_evaluate.py`: 4 人 mixed seating 评估 harness,A 轮换坐位避免 seat bias
+  - `scripts/diag_selfplay.py`: random net 自对弈诊断
+  - `scripts/self_improvement_curve.py`: 相邻 ckpt 头对头胜率曲线
+- **Done — Tie-aware ranking**: `_score_to_rank_values` 同分玩家平均 rank value,消除 player-order noise(关键 — 之前 truncated 时所有 0 分玩家按 player ID 排,这是噪音梯度)
+- **Done — Hybrid value scheme**: terminal 用 full ranking `±1/±0.33`, truncated 用 `(score-mean)/7.5` clip 到 `±0.5`。让 sparse reward 下 value head 仍有 "高分 > 低分" 的 gradient
+- **Done — Mac dev group**: `[dependency-groups.dev]` 加 CPU torch + pytest + tensorboard,让 Mac 端能跑 algo 验证(不依赖 Windows)
+- **Done — Phase 2 ai_agent 集成**: `select_ai_action` 支持加载 PyTorch .pt checkpoint,自动 fallback random,thread-safe module-level cache。`ai_configs.json` 加 `alphazero-latest` 条目指向 `artifacts/checkpoints/latest.pt`
+- **Done — 200 步对比 smoke**:
+  - Vanilla (max_moves=100): loss 4.38→2.22, entropy 3.66→1.99, **0/20 winner**
+  - Hybrid (max_moves=150): loss → 2.06, value_loss 0.45→**0.11** (-56% vs vanilla), entropy 2.34, **1/20 winner (step 180 首次自然结束)**
+  - Hybrid 200步 ckpt MCTS@25 推理: 5/8 自然结束, A 平均 4.38 分(vs random 0.08)
+  - Hybrid 200步 vs heuristic: 0/12 胜(预期,200 步远远不够 — 这是验证 pipeline 不是验证强度)
+
+- **Decisions**:
+  10. **Hybrid value scheme**: 见 decisions.md 2026-05-25 第 10 条
+  11. **Mac dev group**: 见 decisions.md 第 11 条
+  12. **Reward shaping 不做**: 评估后认为 hybrid value 已经解决 sparse reward,reward shaping 会引入额外 bias
+
+- **算法验证 minimum bar 通过**:
+  | 验证项 | Status |
+  |---|---|
+  | Pipeline 不卡死 | ✅ |
+  | Loss 下降 | ✅ -44% to -56% |
+  | Policy entropy 收敛 | ✅ 4.1 → 2.0 |
+  | NN 能拿到 winner | ✅ Hybrid 200 步内 1 次 |
+  | MCTS 推理时自然结束 | ✅ 5/8 |
+  | Win-rate > heuristic | ⏳ 需 Windows GPU 长训练 |
+
+- **Next session 起点 (Windows GPU)**:
+  1. `git pull` 拿 hybrid value + bug fix
+  2. `uv run python -m src.train.splendor_training --total-steps 3000 --selfplay-every 100 --selfplay-games 8 --mcts-sims 50 --max-moves 150 --batch-size 64 --buffer-size 20000 --checkpoint-every 200 --device cuda --hidden-dim 256 --num-blocks 4`
+  3. tensorboard 在 WSL 启动,Mac `ssh -L 6006:localhost:6006 windows`
+  4. 训完跑 `python -m scripts.self_improvement_curve --ckpt-dir artifacts/checkpoints --games 24 --mcts-sims 25`
+  5. 跑 `python -m src.train.splendor_evaluate --ckpt-a artifacts/checkpoints/latest.pt --opponent heuristic --games 24 --mcts-sims 25` 验证是否追上 heuristic
 
 ### Session 1 (2026-05-24, ~7h)
 

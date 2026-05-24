@@ -6,7 +6,26 @@ import json
 from typing import List
 
 from .actions import Action
-from .state import GEM_TYPES, MatchState, PlayerState
+from .state import Card, GEM_TYPES, MatchState, PlayerState
+
+
+def _can_afford(player: PlayerState, card: Card) -> bool:
+    """Mirror of _apply_buy_card's affordability arithmetic.
+
+    Without this check, `_buy_card_actions` enumerates every market card
+    regardless of player wallet, MCTS picks one, apply_action silently fails,
+    and the turn never advances — game stalls. Keep this in sync with
+    actions._apply_buy_card."""
+    bonus = player.bonus_counts()
+    gold_available = player.gems.get("gold", 0)
+    missing = 0
+    for gem, cost in card.cost.items():
+        discount = min(bonus.get(gem, 0), cost)
+        need = max(cost - discount, 0)
+        available = player.gems.get(gem, 0)
+        if available < need:
+            missing += need - available
+    return missing <= gold_available
 
 
 def generate_legal_actions(state: MatchState) -> List[Action]:
@@ -146,7 +165,7 @@ def _buy_card_actions(state: MatchState, player: PlayerState) -> List[Action]:
     actions: List[Action] = []
     for market in state.board.markets.values():
         for card in market:
-            if card is None:
+            if card is None or not _can_afford(player, card):
                 continue
             payload = {"card_id": card.id}
             actions.append(
@@ -158,6 +177,8 @@ def _buy_card_actions(state: MatchState, player: PlayerState) -> List[Action]:
                 )
             )
     for card in player.reserved:
+        if not _can_afford(player, card):
+            continue
         payload = {"card_id": card.id}
         actions.append(
             Action(

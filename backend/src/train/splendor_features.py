@@ -130,11 +130,24 @@ _RANK_VALUE_TABLE = np.array([1.0, 0.33, -0.33, -1.0], dtype=np.float32)
 
 
 def _score_to_rank_values(scores: np.ndarray) -> np.ndarray:
+    """Convert scores to per-player ranking values. Ties share averaged value
+    so player-order is never injected as signal (critical for truncated games
+    where many players share score=0)."""
     n = scores.shape[0]
+    rank_values = _RANK_VALUE_TABLE[:n]
     order = np.argsort(-scores, kind="stable")
-    ranks = np.empty_like(order)
-    ranks[order] = np.arange(n)
-    return _RANK_VALUE_TABLE[:n][ranks]
+    sorted_scores = scores[order]
+    out = np.empty(n, dtype=np.float32)
+    i = 0
+    while i < n:
+        j = i
+        while j < n and sorted_scores[j] == sorted_scores[i]:
+            j += 1
+        avg = float(rank_values[i:j].mean())
+        for k in range(i, j):
+            out[order[k]] = avg
+        i = j
+    return out
 
 
 def ranking_value_global(state: MatchState) -> np.ndarray:
@@ -143,11 +156,43 @@ def ranking_value_global(state: MatchState) -> np.ndarray:
     return _score_to_rank_values(scores)
 
 
-def ranking_value_from_finished_state(state: MatchState, perspective_player_id: str) -> np.ndarray:
-    """4-d ranking value in **rotated perspective** order (perspective_player at index 0)."""
+# Hybrid value: terminal game uses full ranking (±1 / ±0.33), truncated game uses
+# a score-based fractional value capped at ±TRUNCATION_VALUE_SCALE. The cap is
+# intentionally < 1 so that "winning a real game" stays a stronger signal than
+# "ending a truncated game with the highest score". This unblocks AlphaZero
+# from cold-starting in Splendor's sparse-reward 4-player setting (see
+# decision log entry for 2026-05-25).
+_WIN_SCORE = 15
+TRUNCATION_VALUE_SCALE = 0.5
+_TRUNCATION_NORM = 7.5  # = _WIN_SCORE * TRUNCATION_VALUE_SCALE
+
+
+def _truncation_value_global(state: MatchState) -> np.ndarray:
+    scores = np.array([p.score for p in state.players], dtype=np.float32)
+    mean = float(scores.mean())
+    centered = (scores - mean) / _TRUNCATION_NORM
+    return np.clip(centered, -TRUNCATION_VALUE_SCALE, TRUNCATION_VALUE_SCALE).astype(np.float32)
+
+
+def _rotate_to_perspective(values_global: np.ndarray, state: MatchState, perspective_player_id: str) -> np.ndarray:
     rotated_ids = [p.id for p in _rotated_players(state, perspective_player_id)]
-    rotated_scores = np.array(
-        [next(p.score for p in state.players if p.id == pid) for pid in rotated_ids],
-        dtype=np.float32,
-    )
-    return _score_to_rank_values(rotated_scores)
+    global_ids = [p.id for p in state.players]
+    out = np.zeros_like(values_global)
+    for i, pid in enumerate(rotated_ids):
+        out[i] = values_global[global_ids.index(pid)]
+    return out
+
+
+def final_value_from_state(state: MatchState, perspective_player_id: str) -> np.ndarray:
+    """4-d value in **rotated perspective** order. Hybrid: terminal uses ranking,
+    non-terminal uses score-based fractional value with bounded magnitude."""
+    if state.status == "finished" and state.winner is not None:
+        values_global = ranking_value_global(state)
+    else:
+        values_global = _truncation_value_global(state)
+    return _rotate_to_perspective(values_global, state, perspective_player_id)
+
+
+def ranking_value_from_finished_state(state: MatchState, perspective_player_id: str) -> np.ndarray:
+    """Backwards-compatible alias — now routes to the hybrid value."""
+    return final_value_from_state(state, perspective_player_id)

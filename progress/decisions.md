@@ -4,6 +4,45 @@
 
 ---
 
+## 2026-05-25 (Session 2)
+
+### 10. Hybrid value scheme (terminal=ranking + truncated=score-based fractional)
+
+**Decision**: `final_value_from_state` 根据 game 是否自然结束选择不同 value:
+- Terminal (`status=="finished" and winner is not None`): 用 full ranking `[+1, +0.33, -0.33, -1]`(同分 tie 平均)
+- Truncated (max_moves 截断): 用 `(player.score - mean_score) / 7.5`,clip 到 `[-0.5, +0.5]`
+
+**Why**: vanilla AlphaZero 在 4 人 Splendor sparse reward 上冷启动失败。200 步 CPU 训练 0/20 winner,value head 训的全是 truncation noise。Hybrid 让 value head 在 truncated 时仍学到"高分 > 低分"的连续 signal,同时保留"真赢 > 偷分"的强度差(±1 vs ±0.5)。200 步 hybrid 训练 value_loss 0.11 vs vanilla 0.25,首次出现自然 winner。
+
+**Alternatives considered**:
+- Pure vanilla AlphaZero: rejected because 200 步 0 winner,value head 学的全是 player-order noise
+- Reward shaping (中间步骤给 score delta): rejected because 引入额外 bias,会让 NN 学"短期拿分"而不是"长期 close out"
+- Heuristic warm-start (supervised learning): rejected for now because 工程复杂度大,先试更轻的 hybrid
+
+**How to apply**: 训练 / evaluate 都自动用 `final_value_from_state`,旧的 `ranking_value_from_finished_state` 作为 backward-compat alias 也指向 hybrid。`TRUNCATION_VALUE_SCALE` 常量在 `splendor_features.py` 可调。
+
+---
+
+### 11. Mac 端加 dev group (CPU torch + pytest)
+
+**Decision**: `backend/pyproject.toml` 加 `[dependency-groups.dev]` 含 CPU torch + tensorboard + pytest,通过 `[tool.uv.sources]` 的 `marker = "sys_platform == 'linux'"` 让 Linux/WSL 用 cu124 wheel,macOS 用官方 CPU wheel。
+
+**Why**: 算法验证机制需要 Mac 端本地能跑 self-play + evaluate + unit test,否则每次改动都要 push → SSH → Windows,迭代慢 30s+。CPU torch ~150MB 一次性投入,后续所有 algo 验证 + 回归测试都在 Mac 跑。
+
+**How to apply**: `cd backend && uv sync --group dev` 装 Mac 端,Windows 仍 `uv sync --group train`。CI 也走 `--group dev`(后续可加 GitHub Actions)。
+
+---
+
+### 12. Critical bug 回归测试用 pytest property test 而不是 example test
+
+**Decision**: `test_legal_actions.py` 用 random walk 跑 5 个 seed × 200 步,每步验证 "every action returned by generate_legal_actions(state) must succeed when apply_action". 不写单个 example test。
+
+**Why**: 这次发现的 `_buy_card_actions` 不检查可付性,正是个特定 state 才暴露的 bug。Property test 跑了 1000+ random states 才能捕获边界。如果只写 `test_initial_state` 这种 happy path,这个 bug 会一直在。
+
+**How to apply**: 后续往 game/legal_actions/actions 加新 action 类型时,**必须**让 random_walk property test 通过——它就是 contract test。
+
+---
+
 ## 2026-05-24 (Session 1)
 
 ### 1. 训练 env 用 backend 干净引擎,废弃 `environment/env.py`
