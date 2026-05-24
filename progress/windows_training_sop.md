@@ -2,37 +2,68 @@
 
 session 2 后,Mac 端 algo 验证 minimum bar 通过,接力 Windows GPU 跑长训练让 NN 追上 heuristic baseline。
 
-## 0. 前置
+## 0. 前置:Mac 直连 WSL2 (一次性 setup,后续训练全部走直连)
 
-- Tailscale 在线: `ssh smokingmouse@windows` 通(走 100.105.89.46:22 Windows native sshd)
-- WSL Ubuntu 22.04 + RTX 4080 + CUDA 12.6 + Python 3.11 + uv
+走 `ssh windows wsl bash -c` 跑长任务永远会被 Windows OpenSSH session reaper 杀掉。**正确方案是 Mac 直接 SSH 到 WSL2 的 sshd**。一次性配置完后,所有训练用标准 Linux 工具(nohup/&)即可,跟普通远程服务器一样。
 
-### 一次性的 persistence setup(WSL2 + 长训练必做)
+### Step 1: WSL2 用 NAT mode (mirrored mode 跟 Tailscale 冲突)
 
-WSL2 默认在 SSH 退出后 ~60s 内 idle-shutdown distro,且 systemd-logind 会 reap 所有 user processes(连 tmux server 都活不下来)。Long training 必须做两件事:
+`C:\Users\smokingmouse\.wslconfig`:
+```
+[wsl2]
+memory=24GB
+swap=8GB
+vmIdleTimeout=-1
+firewall=false
 
-1. **Enable linger**(让 user@1000.service 在 logout 后存活):
-   ```bash
-   ssh smokingmouse@windows wsl bash -lc "sudo loginctl enable-linger smokingmouse"
-   ```
+guiApplications=true
+```
+改完 `wsl --shutdown` 一次生效。
 
-2. **Disable distro idle shutdown**(`C:\Users\smokingmouse\.wslconfig`):
-   ```
-   [wsl2]
-   memory=24GB
-   swap=8GB
-   vmIdleTimeout=-1
-   guiApplications=true
-   networkingMode=mirrored
-   ```
-   改完 `wsl --shutdown` 一次生效。
+### Step 2: WSL 内启 sshd 并 enable autostart
 
-3. **用 `systemd-run --user`**(不是 nohup,不是 tmux)启动 long task — 自动放进 linger 保护的 user@1000.service cgroup,SSH 断开后 + WSL 不退出时持久:
-   ```bash
-   systemd-run --user --unit=mytask \
-     --setenv=PATH=/home/smokingmouse/.local/bin:/usr/local/bin:/usr/bin:/bin \
-     bash -c "<command>"
-   ```
+```bash
+ssh windows wsl bash -lc "sudo systemctl enable ssh && sudo service ssh start"
+```
+
+### Step 3: WSL UFW 放行 2222
+
+UFW 默认 DROP 所有 inbound,**这是踩了大半小时的坑**:
+```bash
+ssh windows wsl bash -lc "sudo ufw allow 2222/tcp && sudo ufw reload"
+```
+
+### Step 4: Windows portproxy + 防火墙
+
+NAT mode 下 WSL 有独立 IP (如 172.25.82.79)。Windows portproxy 把 host:2222 转发给 WSL:2222:
+```powershell
+# (replace WSL_IP with current WSL eth0 IP — get via: wsl hostname -I)
+netsh interface portproxy add v4tov4 listenport=2222 listenaddress=0.0.0.0 connectport=2222 connectaddress=<WSL_IP>
+New-NetFirewallRule -DisplayName "WSL SSH 2222" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 2222 -Profile Any
+```
+
+### Step 5: 持续保持 WSL distro alive (避免 idle shutdown 杀 sshd)
+
+即使 vmIdleTimeout=-1,WSL distro 在没有 active wsl.exe 持有时仍可能停机。Mac 端开一个 background SSH 持有 wsl 进程:
+
+```bash
+# Mac side (一次性,加进 ~/.zshrc 或 launchd):
+ssh -o ServerAliveInterval=30 smokingmouse@windows \
+  'wsl --user smokingmouse --exec /bin/bash -c "while true; do date; sleep 60; done"' \
+  > /tmp/wsl_keepalive.log 2>&1 &
+```
+
+这个 bg ssh 持有 wsl 进程持有 distro,Mac 端 keepalive 防 idle disconnect。
+
+### Step 6: 验证直连
+
+```bash
+# 现在 Mac 直连 WSL 是标准 Linux SSH:
+ssh -p 2222 smokingmouse@192.168.10.153 'uname -r; nvidia-smi --query-gpu=name --format=csv,noheader'
+# Expected: 6.6.114.1-microsoft-standard-WSL2 / NVIDIA GeForce RTX 4080
+```
+
+成功后,所有训练命令走 `ssh -p 2222 smokingmouse@192.168.10.153 'nohup ... &'`,跟普通远程 Linux 服务器零差别。
 
 ## 1. 拉最新代码
 
@@ -44,73 +75,50 @@ ssh smokingmouse@windows wsl bash -lc "cd /home/smokingmouse/python/ai/Splendor 
 
 > 单局自然结束 ~120 moves,heuristic 平均 116。3000 步训练在 RTX 4080 上预计 4-6 小时。
 
-把下面的脚本 scp 到 Windows 然后跑(SSH 转义太脆弱,用脚本):
+走直连 SSH + 标准 nohup,跟普通远程 Linux 服务器零差别:
 
 ```bash
-# Mac side: create the launch script
-cat > /tmp/launch_splendor.sh <<'EOF'
-#!/bin/bash
-set -e
-export PATH="/home/smokingmouse/.local/bin:$PATH"
-cd /home/smokingmouse/python/ai/Splendor
-systemctl --user stop splendor-train.service 2>/dev/null || true
-rm -rf artifacts/checkpoints/* artifacts/tensorboard/* 2>/dev/null
-mkdir -p artifacts/logs
-systemd-run --user \
-  --unit=splendor-train \
-  --description="Splendor AlphaZero 3000-step training" \
-  --working-directory=/home/smokingmouse/python/ai/Splendor/backend \
-  --setenv=PATH=/home/smokingmouse/.local/bin:/usr/local/bin:/usr/bin:/bin \
-  --setenv=PYTHONUNBUFFERED=1 \
-  bash -c "exec >/home/smokingmouse/python/ai/Splendor/artifacts/logs/train.log 2>&1; \
-    uv run python -u -m src.train.splendor_training \
-      --total-steps 3000 --selfplay-every 100 --selfplay-games 8 --mcts-sims 50 \
-      --max-moves 150 --temperature-moves 16 --batch-size 64 --buffer-size 20000 \
-      --checkpoint-every 200 --device cuda --hidden-dim 256 --num-blocks 4 --seed 42"
-sleep 5 && systemctl --user is-active splendor-train && pgrep -fa splendor_training
-EOF
-
-# Push and run
-scp /tmp/launch_splendor.sh smokingmouse@windows:Downloads/
-ssh smokingmouse@windows wsl bash /mnt/c/Users/smokingmouse/Downloads/launch_splendor.sh
+ssh -p 2222 smokingmouse@192.168.10.153 '
+cd /home/smokingmouse/python/ai/Splendor && \
+rm -rf artifacts/checkpoints/* artifacts/tensorboard/* artifacts/logs/* 2>/dev/null; \
+mkdir -p artifacts/logs && \
+cd backend && \
+nohup /home/smokingmouse/.local/bin/uv run python -u -m src.train.splendor_training \
+  --total-steps 3000 --selfplay-every 100 --selfplay-games 8 --mcts-sims 50 \
+  --max-moves 150 --temperature-moves 16 --batch-size 64 --buffer-size 20000 \
+  --checkpoint-every 200 --device cuda --hidden-dim 256 --num-blocks 4 --seed 42 \
+  </dev/null >/home/smokingmouse/python/ai/Splendor/artifacts/logs/train.log 2>&1 &
+echo "pid=$!"'
 ```
 
-**监控**:
+**监控**(实时 tail):
 ```bash
-ssh smokingmouse@windows wsl bash -lc "tail -f /home/smokingmouse/python/ai/Splendor/artifacts/logs/train.log"
+ssh -p 2222 smokingmouse@192.168.10.153 'tail -f /home/smokingmouse/python/ai/Splendor/artifacts/logs/train.log'
 ```
 
 **停止**:
 ```bash
-ssh smokingmouse@windows wsl bash -lc "systemctl --user stop splendor-train.service"
+ssh -p 2222 smokingmouse@192.168.10.153 'pkill -f splendor_training'
 ```
 
 ## 3. TensorBoard 端口转发
 
 > ⚠️ tensorboard 2.20.x 需要 `pkg_resources`,setuptools 81+ 删了它 — `pyproject.toml` 已 pin `setuptools<81`,sync 后即可。
 
+启 TB(直连 SSH + nohup):
 ```bash
-# Mac side
-cat > /tmp/launch_tb.sh <<'EOF'
-#!/bin/bash
-export PATH="/home/smokingmouse/.local/bin:$PATH"
-systemctl --user stop splendor-tb.service 2>/dev/null || true
-systemd-run --user \
-  --unit=splendor-tb \
-  --description="Splendor TensorBoard on :6006" \
-  --working-directory=/home/smokingmouse/python/ai/Splendor \
-  --setenv=PATH=/home/smokingmouse/.local/bin:/usr/local/bin:/usr/bin:/bin \
-  --setenv=PYTHONUNBUFFERED=1 \
-  bash -c "exec >/home/smokingmouse/python/ai/Splendor/artifacts/logs/tb.log 2>&1; \
-    uv run --project backend tensorboard --logdir artifacts/tensorboard --port 6006 --bind_all"
-sleep 4 && systemctl --user is-active splendor-tb
-EOF
+ssh -p 2222 smokingmouse@192.168.10.153 '
+cd /home/smokingmouse/python/ai/Splendor && \
+nohup /home/smokingmouse/.local/bin/uv run --project backend tensorboard \
+  --logdir artifacts/tensorboard --port 6006 --bind_all \
+  </dev/null >/home/smokingmouse/python/ai/Splendor/artifacts/logs/tb.log 2>&1 &
+echo "tb pid=$!"'
 
-scp /tmp/launch_tb.sh smokingmouse@windows:Downloads/
-ssh smokingmouse@windows wsl bash /mnt/c/Users/smokingmouse/Downloads/launch_tb.sh
+# Mac 端转发 6006 到本地浏览器
+ssh -L 6006:localhost:6006 -p 2222 smokingmouse@192.168.10.153  # browse http://localhost:6006
 
-# Mac: forward port (keep this open while watching curves)
-ssh -L 6006:localhost:6006 smokingmouse@windows  # browse http://localhost:6006
+# 也需要在 Windows 端 portproxy + firewall 把 6006 暴露(只第一次):
+# ssh smokingmouse@windows powershell.exe -Command "netsh interface portproxy add v4tov4 listenport=6006 listenaddress=0.0.0.0 connectport=6006 connectaddress=<WSL_IP>"
 ```
 
 观察的核心曲线:
