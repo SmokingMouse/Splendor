@@ -78,6 +78,7 @@ def save_checkpoint(model: SplendorPVNet, path: Path, metadata: dict | None = No
             "obs_dim": model.obs_dim,
             "action_dim": model.action_dim,
             "hidden_dim": model.hidden_dim,
+            "num_blocks": len(model.blocks),
             "value_dim": model.value_dim,
         },
         "metadata": metadata or {},
@@ -88,10 +89,17 @@ def save_checkpoint(model: SplendorPVNet, path: Path, metadata: dict | None = No
 def load_checkpoint(path: Path, device: str | torch.device = "cpu") -> tuple[SplendorPVNet, dict]:
     payload = torch.load(path, map_location=device, weights_only=False)
     cfg = payload.get("config", {})
+    # Backward-compat: older ckpts without num_blocks → infer from state_dict
+    num_blocks = cfg.get("num_blocks")
+    if num_blocks is None:
+        # state_dict keys look like "blocks.<N>.fc1.weight"; count distinct N
+        keys = payload["model_state_dict"].keys()
+        num_blocks = len({int(k.split(".")[1]) for k in keys if k.startswith("blocks.")})
     model = SplendorPVNet(
         obs_dim=cfg.get("obs_dim", OBS_DIM),
         action_dim=cfg.get("action_dim", ACTION_SPACE_SIZE),
         hidden_dim=cfg.get("hidden_dim", 256),
+        num_blocks=num_blocks,
         value_dim=cfg.get("value_dim", NUM_PLAYERS),
     )
     model.load_state_dict(payload["model_state_dict"])
