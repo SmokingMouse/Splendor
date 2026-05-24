@@ -48,13 +48,16 @@ Windows (WSL2 Ubuntu 22.04 /home/smokingmouse/python/ai/Splendor)
 
 ### Mid-term (1-2 周)
 
-- [ ] **Windows GPU 长训练**: 1500-3000 steps, mcts_sims=50, batch=64,验证 hybrid value 是否能让 NN 逐步追上 heuristic baseline (目标 ≥ 50% 胜率 vs heuristic)
-- [ ] **TensorBoard 端口转发**: WSL 启 tensorboard,Mac `ssh -L 6006:localhost:6006` 浏览器看曲线
-- [ ] **Self-improvement curve 自动化**: 训练完跑 `scripts/self_improvement_curve.py`,确认 win_rate 跨 N 个 checkpoint 单调上升
+- [x] **Windows GPU 长训练**: v1/v2/v3 三轮完成,best ckpt = v3 step 1000 (A=4.44 vs heuristic 10.46, 0% win rate)
 - [x] 实现 evaluation: checkpoint vs random / heuristic baseline 胜率
 - [x] AI agent 升级: 读 PyTorch checkpoint + 推理时跑 MCTS (eval temperature=0)
-- [ ] 跑通后 checkpoint POST /artifacts → web UI 玩家体验
-- [ ] **调优 hybrid value scale**: 当前 ±0.5 cap 是猜测,需对比 [0.3, 0.5, 0.7] 找最优(可能太宽让 NN 不学 close out)
+- [x] best ckpt → web UI 可玩 (alphazero-latest config)
+- [ ] **要 break 0% win rate vs heuristic,需选一条路** (currently blocking):
+  - Path A: **Heuristic supervised warm-start** (AlphaStar 路数)。Generate 5-10K (obs, heuristic_action) tuples → SL 1 epoch → 切 self-play。最直接,~30-60 min Mac CPU pre-train + 4-6h GPU RL。
+  - Path B: **大幅扩容**(512-hidden 6-block, 200 MCTS sims, 10000+ steps, 较小 buffer 5000)→ ~24h+ GPU。compute-heavy 但更"纯"。
+  - Path C: **ISMCTS** (information-set MCTS,根治 hidden info 偏差)。需要重写 MCTS expand/rollout,工程量大。
+- [ ] **TensorBoard 端口转发**: WSL 启 tensorboard,Mac `ssh -L 6006:localhost:6006` 浏览器看曲线 (没做完)
+- [ ] **Self-improvement curve 跨 v1/v2/v3 best ckpt**: 用 `scripts/self_improvement_curve.py` 比较 (主要看 v3 是否 dominates v1/v2)
 
 ### Long-term (1+ 月)
 
@@ -66,6 +69,36 @@ Windows (WSL2 Ubuntu 22.04 /home/smokingmouse/python/ai/Splendor)
 - [ ] 把 in-memory training repo 升级为 SQLite (避免重启丢 project/run 元数据)
 
 ## Session Log
+
+### Session 3 (2026-05-25, ~6h) — 直连 WSL2 + GPU 长训练 v1/v2/v3
+
+- **Done — Mac 直连 WSL2 ssh 持久化方案**: 经过 nohup/setsid/tmux/linger/systemd-run 全部失败后,定位真因 = `ssh windows wsl bash` 模式下 Windows OpenSSH server 反复 reap WSL 子进程。最终方案: WSL 内启 sshd:2222 → Windows portproxy 转发 → Mac SSH 直连。需要修 5 个坑:NAT mode (mirrored 跟 Tailscale 冲突)、UFW allow 2222 (默认 INPUT DROP)、Windows firewall + portproxy、`vmIdleTimeout=-1`、Mac bg keepalive 持有 distro。详见 [windows_training_sop.md](windows_training_sop.md)。沉淀到 `~/.claude/memory/insights/remote_debug_gotchas.md`。
+
+- **Done — Pre-training infra fixes**:
+  - `splendor_network.py`: save_checkpoint 没存 `num_blocks` → load 时 mismatch。已修 + backward-compat infer from state_dict
+  - `pyproject.toml`: pin `setuptools<81` (tensorboard 2.20 需要 deprecated `pkg_resources`)
+  - `.gitignore`: 精确化 training artifacts 路径(原本 broad ignore 会误伤 web UI match snapshots)
+
+- **Done — GPU 训练 3 次迭代,每次新 insight**:
+
+  **v1 (3000 step → killed at 1900)**: 普通 4-player AlphaZero。Self-play winner oscillating 0-8/8,step 1000-1800 反复进入 stall trap (avg_len 接近 max_moves, truncate 50-75%)。Step 1200 eval **0/12 vs heuristic** (A=0.75, opp=12.67)。NN policy: top-1 action = reserve_card tier 3 (26%), 大部分 prob mass 在 reserve actions。**根因 — Determinized MCTS 偷看 deck**: NN 学到 reserve_deck cheat (Session 1 Decision 4 已标 risk)。
+
+  **v2 (3000 step → killed at 1200)**: MCTS root 重洗未见 deck (`_reshuffle_hidden_deck`),消除 cheat。Self-play 表现略好,step 800 是 7/8 0% (vs v1 7/8 12%)。Step 800/1200 eval 仍 **0/12 vs heuristic** (A=0.67, opp=12.75)。NN policy: **buy_card 仅 0.6%** mass! 4 个一样的 NN 在 self-play 都不买卡 → 全 truncate → value head 学 truncation noise → 反过来强化"不买"。**Classic AlphaZero 4-player self-play bad equilibrium**。
+
+  **v3 (3000 step → killed at 2000)**: `--heuristic-mix-rate 0.5` — 50% self-play 游戏中 1-3 seats 替换为 HeuristicAgent (training samples 只 from NN seats)。Self-play 持续 healthy (7-8/8 winner, 0% truncate 多数 batch),没掉 stall trap。**Step 1000 eval A=4.44 (6x v2 的 0.67)**,但 win rate 仍 0%。Step 1200/1600 plateau in A=3-4 range,step 2000 regress 到 A=1.44 (over-fit / instability)。
+  
+- **Best ckpt 部署到 web UI**: `v3_step_0001000.pt` → `artifacts/checkpoints/latest.pt`,`ai_configs.json` 的 `alphazero-latest` 即可玩到这一版。
+
+- **诚实总结 — 现有 setup 上限**:
+  - 256-dim 4-block PV-net + 50 MCTS sims + 3000 steps + Mac RTX 4080 是 4-6h 一轮。
+  - 三种关键 fix (hybrid value / deck reshuffle / mixed self-play) **都不足以让 NN beat greedy heuristic**。
+  - Best so far: A 平均 4.44 vs heuristic 10.46 (~30% relative)。Win rate 仍 0%。
+  - 继续盲调参 ROI 低。**真正下一步要么 (a) heuristic supervised warm-start** (AlphaStar 路数: 先模仿 heuristic 1-2 epoch,再 RL),**(b) 大幅扩容** (512-hidden 6-block, 200 MCTS sims, 10000+ steps,需要 ~24h GPU),**(c) ISMCTS** (真 info-set MCTS,根治不完美信息)。
+
+- **跨 session insights 沉淀**:
+  - [Legal-actions 静默卡死模式](~/.claude/memory/insights/legal_actions_silent_stall_pattern.md) (v0 bug)
+  - [Sparse-reward Hybrid value 模式](~/.claude/memory/insights/sparse_reward_hybrid_value_pattern.md) (Session 2 fix,Session 3 验证有局限)
+  - [远程调试 + WSL2 长任务](~/.claude/memory/insights/remote_debug_gotchas.md) 重写第 0 节 (Mac 直连 WSL sshd 真方案)
 
 ### Session 2 (2026-05-25, ~3h)
 
