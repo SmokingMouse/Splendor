@@ -67,10 +67,15 @@ def _load_nobles() -> List[Noble]:
     return nobles
 
 
-def _init_board() -> BoardState:
+_BANK_PER_PLAYER = {2: 4, 3: 5, 4: 7}
+_NOBLE_COUNT_PER_PLAYER = {2: 3, 3: 4, 4: 5}
+
+
+def _init_board(num_players: int = 2) -> BoardState:
     bank = empty_gems()
+    per_color = _BANK_PER_PLAYER.get(num_players, 4)
     for gem in ["diamond", "sapphire", "emerald", "ruby", "onyx"]:
-        bank[gem] = 4
+        bank[gem] = per_color
     bank["gold"] = 5
 
     all_cards = _load_cards()
@@ -87,7 +92,7 @@ def _init_board() -> BoardState:
 
     nobles = _load_nobles()
     random.shuffle(nobles)
-    nobles = nobles[:3]
+    nobles = nobles[: _NOBLE_COUNT_PER_PLAYER.get(num_players, 3)]
 
     return BoardState(bank_gems=bank, decks=decks, markets=markets, nobles=nobles)
 
@@ -102,7 +107,7 @@ def _refill_market_from_deck(
 
 def create_match(human_name: str, ai_id: str) -> MatchState:
     match_id = str(uuid.uuid4())
-    board = _init_board()
+    board = _init_board(num_players=2)
     players = [
         PlayerState(id=f"human:{human_name}", type="human"),
         PlayerState(id=f"ai:{ai_id}", type="ai"),
@@ -115,6 +120,23 @@ def create_match(human_name: str, ai_id: str) -> MatchState:
         board=board,
         players=players,
         ai_config_id=ai_id,
+    )
+
+
+def create_selfplay_match(num_players: int = 4, prefix: str = "sp") -> MatchState:
+    match_id = str(uuid.uuid4())
+    board = _init_board(num_players=num_players)
+    players = [
+        PlayerState(id=f"ai:{prefix}:{i}", type="ai") for i in range(num_players)
+    ]
+    return MatchState(
+        id=match_id,
+        status="running",
+        current_player_id=players[0].id,
+        turn=1,
+        board=board,
+        players=players,
+        ai_config_id=prefix,
     )
 
 
