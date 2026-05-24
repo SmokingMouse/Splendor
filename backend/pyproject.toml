@@ -17,6 +17,8 @@ train = [
   "tensorboard>=2.16",
   "tqdm>=4.66",
   "rich>=13.7",
+  # tensorboard 2.20 imports pkg_resources; setuptools 81+ removed it
+  "setuptools<81",
 ]
 dev = [
   "torch>=2.4",
@@ -24,6 +26,7 @@ dev = [
   "tqdm>=4.66",
   "rich>=13.7",
   "pytest>=8.0",
+  "setuptools<81",
 ]
 
 [[tool.uv.index]]
