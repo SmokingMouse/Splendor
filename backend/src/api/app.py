@@ -5,7 +5,7 @@ from .routes import api_router
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Splendor 人机对战 API")
+    app = FastAPI(title="Splendor 后端 API (对战 + 训练脚手架)")
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],

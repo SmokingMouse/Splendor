@@ -5,6 +5,12 @@
       "name": "默认 AI",
       "description": "随机行动 AI",
       "path": ""
+    },
+    {
+      "id": "splendor-trained",
+      "name": "璀璨宝石-训练策略",
+      "description": "基于自对弈教师信号训练的线性策略",
+      "path": "/home/smokingmouse/python/ai/Splendor/backend/artifacts/models/splendor_policy_latest.json"
     }
   ]
 }
