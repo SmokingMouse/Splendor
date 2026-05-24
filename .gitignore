@@ -23,6 +23,11 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Training artifacts (checkpoints, tensorboard events, eval outputs)
-artifacts/
-backend/artifacts/
+# Training artifacts (repo-root): checkpoints, tensorboard events, eval outputs
+/artifacts/
+# Training eval outputs that live inside backend/ (per-script outputs)
+backend/artifacts/self_improvement.jsonl
+backend/artifacts/models/
+backend/artifacts/checkpoints/
+backend/artifacts/tensorboard/
+backend/artifacts/logs/
