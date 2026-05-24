@@ -15,20 +15,29 @@ RESERVED_SLOTS = 3
 ACTION_SPACE_SIZE = 60
 
 
-def _build_index_to_spec() -> list[tuple[str, dict]]:
+def _take_gems_key(gems: dict) -> frozenset:
+    return frozenset((g, c) for g, c in gems.items() if c > 0)
+
+
+def _build_index_to_spec() -> tuple[list[tuple[str, dict]], dict[frozenset, int]]:
     specs: list[tuple[str, dict]] = []
+    take_lookup: dict[frozenset, int] = {}
+
+    def add_take(gems: dict) -> None:
+        specs.append(("take_gems", {"gems": gems}))
+        take_lookup[_take_gems_key(gems)] = len(specs) - 1
 
     for combo in itertools.combinations(GEM_COLORS, 3):
-        specs.append(("take_gems", {"gems": {g: 1 for g in combo}}))
+        add_take({g: 1 for g in combo})
 
     for gem in GEM_COLORS:
-        specs.append(("take_gems", {"gems": {gem: 2}}))
+        add_take({gem: 2})
 
     for combo in itertools.combinations(GEM_COLORS, 2):
-        specs.append(("take_gems", {"gems": {combo[0]: 1, combo[1]: 1}}))
+        add_take({combo[0]: 1, combo[1]: 1})
 
     for gem in GEM_COLORS:
-        specs.append(("take_gems", {"gems": {gem: 1}}))
+        add_take({gem: 1})
 
     for tier in TIERS:
         for slot in range(MARKET_SLOTS):
@@ -45,36 +54,15 @@ def _build_index_to_spec() -> list[tuple[str, dict]]:
         specs.append(("reserve_deck", {"tier": tier}))
 
     assert len(specs) == ACTION_SPACE_SIZE, f"action space size mismatch: {len(specs)}"
-    return specs
+    return specs, take_lookup
 
 
-INDEX_TO_SPEC: list[tuple[str, dict]] = _build_index_to_spec()
+INDEX_TO_SPEC, TAKE_GEMS_LOOKUP = _build_index_to_spec()
 
 
 def _take_gems_index(payload: dict) -> Optional[int]:
     gems = payload.get("gems", {})
-    nonzero = sorted([(g, c) for g, c in gems.items() if c > 0])
-
-    counts = [c for _, c in nonzero]
-    total = sum(counts)
-
-    if total == 3 and all(c == 1 for c in counts):
-        combo = tuple(g for g, _ in nonzero)
-        all_combos = list(itertools.combinations(GEM_COLORS, 3))
-        return all_combos.index(combo)
-
-    if total == 2 and len(nonzero) == 1 and counts[0] == 2:
-        return 10 + GEM_COLORS.index(nonzero[0][0])
-
-    if total == 2 and len(nonzero) == 2 and all(c == 1 for c in counts):
-        combo = tuple(g for g, _ in nonzero)
-        all_combos = list(itertools.combinations(GEM_COLORS, 2))
-        return 15 + all_combos.index(combo)
-
-    if total == 1 and len(nonzero) == 1:
-        return 25 + GEM_COLORS.index(nonzero[0][0])
-
-    return None
+    return TAKE_GEMS_LOOKUP.get(_take_gems_key(gems))
 
 
 def _resolve_card_market_slot(state: MatchState, card_id: str) -> Optional[tuple[int, int]]:

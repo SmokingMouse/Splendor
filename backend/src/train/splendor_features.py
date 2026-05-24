@@ -126,14 +126,28 @@ def current_player_perspective_index(state: MatchState) -> int:
     return 0
 
 
+_RANK_VALUE_TABLE = np.array([1.0, 0.33, -0.33, -1.0], dtype=np.float32)
+
+
+def _score_to_rank_values(scores: np.ndarray) -> np.ndarray:
+    n = scores.shape[0]
+    order = np.argsort(-scores, kind="stable")
+    ranks = np.empty_like(order)
+    ranks[order] = np.arange(n)
+    return _RANK_VALUE_TABLE[:n][ranks]
+
+
+def ranking_value_global(state: MatchState) -> np.ndarray:
+    """4-d ranking value in **global** player order (state.players[0..3])."""
+    scores = np.array([p.score for p in state.players], dtype=np.float32)
+    return _score_to_rank_values(scores)
+
+
 def ranking_value_from_finished_state(state: MatchState, perspective_player_id: str) -> np.ndarray:
+    """4-d ranking value in **rotated perspective** order (perspective_player at index 0)."""
     rotated_ids = [p.id for p in _rotated_players(state, perspective_player_id)]
     rotated_scores = np.array(
         [next(p.score for p in state.players if p.id == pid) for pid in rotated_ids],
         dtype=np.float32,
     )
-    order = np.argsort(-rotated_scores, kind="stable")
-    ranks = np.empty_like(order)
-    ranks[order] = np.arange(len(order))
-    rank_values = np.array([1.0, 0.33, -0.33, -1.0], dtype=np.float32)
-    return rank_values[ranks]
+    return _score_to_rank_values(rotated_scores)

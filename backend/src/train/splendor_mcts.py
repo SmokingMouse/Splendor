@@ -21,7 +21,7 @@ from .splendor_action_space import (
 from .splendor_features import (
     NUM_PLAYERS,
     encode_observation,
-    ranking_value_from_finished_state,
+    ranking_value_global,
 )
 from .splendor_network import SplendorPVNet
 
@@ -73,13 +73,19 @@ class DeterminizedMCTS:
 
     @torch.no_grad()
     def _evaluate(self, state: MatchState) -> tuple[np.ndarray, np.ndarray]:
-        perspective_id = state.players[_player_index(state, state.current_player_id)].id
+        perspective_idx = _player_index(state, state.current_player_id)
+        perspective_id = state.players[perspective_idx].id
         obs = encode_observation(state, perspective_id)
         obs_t = torch.from_numpy(obs).unsqueeze(0).to(self.device)
-        policy_logits, value = self.network(obs_t)
+        policy_logits, value_rotated = self.network(obs_t)
         policy_logits = policy_logits[0].cpu().numpy()
-        value = value[0].cpu().numpy()
-        return policy_logits, value
+        value_rotated = value_rotated[0].cpu().numpy()
+        num_players = len(state.players)
+        value_global = np.zeros(NUM_PLAYERS, dtype=np.float32)
+        for k in range(num_players):
+            global_idx = (perspective_idx + k) % num_players
+            value_global[global_idx] = value_rotated[k]
+        return policy_logits, value_global
 
     def _expand(self, node: MCTSNode, policy_logits: np.ndarray) -> None:
         legal_actions = generate_legal_actions(node.state)
@@ -152,8 +158,7 @@ class DeterminizedMCTS:
         )
 
         if root.is_terminal:
-            terminal_value = ranking_value_from_finished_state(state, state.current_player_id)
-            return root, terminal_value
+            return root, ranking_value_global(state)
 
         policy_logits, value = self._evaluate(root.state)
         self._expand(root, policy_logits)
@@ -167,7 +172,7 @@ class DeterminizedMCTS:
                 node = self._select_child(node)
 
             if node.is_terminal:
-                value = ranking_value_from_finished_state(node.state, node.state.current_player_id)
+                value = ranking_value_global(node.state)
             else:
                 policy_logits, value = self._evaluate(node.state)
                 self._expand(node, policy_logits)
