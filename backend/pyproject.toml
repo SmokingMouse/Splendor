@@ -10,6 +10,23 @@ dependencies = [
   "numpy>=1.26",
 ]
 
+[dependency-groups]
+train = [
+  "torch>=2.4",
+  "ray[default]>=2.10",
+  "tensorboard>=2.16",
+  "tqdm>=4.66",
+  "rich>=13.7",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
