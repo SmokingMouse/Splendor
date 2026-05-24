@@ -28,15 +28,19 @@ Windows (WSL2 Ubuntu 22.04 /home/smokingmouse/python/ai/Splendor)
 
 ### Short-term (本周)
 
-- [ ] WSL 端 `cd backend && uv sync --group train` 装 PyTorch CUDA + Ray + tensorboard
-- [ ] 验证 `torch.cuda.is_available() == True` (RTX 4080)
-- [ ] **设计 fixed-size action encoding** (~120-150 维,覆盖所有 take_gems/buy/reserve/return 组合)
-- [ ] **设计 observation encoder** (4 人视角的 flat vector,涵盖 bank/markets/4 玩家手牌/已购卡 bonus)
-- [ ] 重写 `backend/src/train/splendor_features.py` → AlphaZero obs encoder
-- [ ] 写 `backend/src/train/splendor_network.py` → ResNet-MLP PV-net,**4 维 value head**
-- [ ] 写 `backend/src/train/splendor_mcts.py` → Determinized PUCT MCTS,4 人 backup
-- [ ] 修 `_create_selfplay_match` 为 **4 人** (现状是 2 人简化)
-- [ ] 重写 `splendor_training.py` → self-play → replay → train → checkpoint 循环
+- [x] WSL 端 `uv sync --group train` 装 PyTorch CUDA + Ray + tensorboard
+- [x] 验证 `torch.cuda.is_available() == True` (RTX 4080)
+- [x] 设计 fixed-size action encoding (60 维, return_gems 用启发式自动处理不进 RL)
+- [x] 设计 observation encoder (377 维 flat vector, 4 player rotated 视角)
+- [x] 重写 `backend/src/train/splendor_features.py` → AlphaZero obs encoder
+- [x] 写 `backend/src/train/splendor_network.py` → Residual-MLP PV-net, 4 维 value head
+- [x] 写 `backend/src/train/splendor_mcts.py` → Determinized 4 玩家 PUCT MCTS
+- [x] 修 `_create_selfplay_match` 为 4 人 (通过 backend 加 `create_selfplay_match` + `_init_board` 参数化)
+- [x] 重写 `splendor_training.py` → self-play → replay → train → checkpoint 循环
+- [x] **Pipeline 端到端 smoke 通**: selfplay 45 moves / 5.7s CPU → train 10 步 → `latest.pt` 写出
+- [ ] **修 max_turns 语义** (当前限制 state.turn 不限制 move,实际 game 比配置长 5-10x)
+- [ ] **缓解 game 不结束** (4 人 random net 倾向无限 reserve;加 max_moves 硬截断 + reward shaping)
+- [ ] **跑稍大 smoke** (100+ train steps, 验证 loss 真下降, tensorboard 看曲线)
 
 ### Mid-term (1-2 周)
 
@@ -57,29 +61,46 @@ Windows (WSL2 Ubuntu 22.04 /home/smokingmouse/python/ai/Splendor)
 
 ## Session Log
 
-### Session 1 (2026-05-24)
+### Session 1 (2026-05-24, ~7h)
 
-- **Done**:
-  - 摸清 GitHub 上 SmokingMouse/Splendor 三套并存的代码:
-    - `environment/env.py` 老 prototype (pandas,2023 demo,与 backend 脱节)
-    - `backend/src/{game,api,engine,infra}` 干净 dataclass 引擎 + Web UI (2026-01)
-    - **WSL 工作分支 001-ai-training-scaffold** 已搭好整套 MLOps 框架 + 训过一个线性策略 baseline (2026-02 codex,**从未 push**)
-  - 摸清 WSL 工作分支的两个 gap: `run_service._execute_run` 是 mock; self-play 是 2 人简化
-  - 参考 SmokingMouse/GomokuZero 吃透 AlphaZero 实现风格 (Ray + PV-net + PUCT + tensorboard)
+- **Done — 基础设施**:
+  - 摸清 GitHub Splendor 三套并存的代码 + WSL 上有未 push 的 codex Feb 2026 scaffold
   - 跟用户对齐 9 条架构决策 (见 [decisions.md](decisions.md))
-  - 配通 Mac → Tailscale → Windows OpenSSH 22 → `wsl` → Ubuntu (`smokingmouse`) SSH 链路
-  - WSL 装 uv + Python 3.11.14, 配通 NOPASSWD sudo
-  - 解决 Tailscale DNS 劫持 (临时改 resolv.conf)
-  - WSL git push HTTP/2 + GnuTLS + proxy CONNECT 兼容 bug → 走 git bundle scp 绕过, **把 codex Feb 2026 的 scaffold 终于 push 到 origin/001-ai-training-scaffold**
-- **Decisions** (详见 decisions.md):
-  - 弃用错推的 origin/001-splendor-ai-match commit
-  - 算法层完全替换为 AlphaZero (不留线性 baseline)
-  - 4 人 self-play (非 2 人简化)
-  - CLI 训练 + 完成后 API 注册 artifact (不接进 run_service mock)
-- **Next**:
-  - WSL `uv sync --group train` 装 PyTorch CUDA + Ray
-  - 验证 `torch.cuda.is_available()`
-  - 然后设计 observation/action encoding,进入算法层重写
+  - Mac → Tailscale → Windows OpenSSH 22 → `wsl` → Ubuntu 链路通
+  - WSL: uv + Python 3.11.14 + NOPASSWD sudo + PyTorch 2.6.0+cu124 + Ray 2.55.1 + tensorboard
+  - 解 Tailscale DNS 劫持 (临时改 resolv.conf) + WSL2 GPU passthrough 段错误 (`wsl --shutdown` 修)
+  - WSL git push GnuTLS+proxy 不通 → bundle scp 中转把 codex scaffold 推上 origin/001-ai-training-scaffold
+
+- **Done — Phase 1 算法层** (commits `0fbddf7..d2a48b4`):
+  - `splendor_action_space.py` (NEW): 60-d fixed action encoding, frozenset 反查表
+  - `splendor_features.py` (REWRITE): 377-d obs encoder, 4 player rotated 视角
+  - `splendor_network.py` (NEW): Residual-MLP PV-net, 4-d value head
+  - `splendor_mcts.py` (NEW): Determinized 4 人 PUCT MCTS, value un-rotate 到 global 后 backup
+  - `splendor_selfplay.py` (REWRITE): 4 人 MCTS self-play, return_gems 启发式自动处理
+  - `splendor_training.py` (REWRITE): AlphaZero 主循环 + cosine LR + tensorboard + checkpoint
+  - `splendor_policy.py` (DELETE): 线性策略弃用
+  - `match.py` (EXTEND): `create_selfplay_match(num_players)` + `_init_board` 参数化
+  - `ai_agent.py`: 回 random fallback (Phase 2 接 PyTorch + MCTS)
+
+- **Done — smoke 调试**:
+  - Bug 1: `_take_gems_index` 字母序 vs GEM_COLORS 序不匹配 → frozenset lookup 修
+  - Bug 2: silent — MCTS value backup 需要 unrotate 成 global perspective,否则模型学错东西
+  - **Pipeline 端到端通**: 第 1 局 self-play (45 moves, 5.7s CPU) → train 10 steps → `latest.pt` 写出
+
+- **Decisions** (详见 decisions.md): 9 条全部对齐
+
+- **跨 session insights 沉淀到 global memory**:
+  - [WSL2 训练机三大坑](~/.claude/memory/insights/wsl2_gotchas.md)
+  - [SSH 调试三反直觉点](~/.claude/memory/insights/ssh_debug_tricks.md)
+  - [推理 device 选择](~/.claude/memory/insights/inference_device_selection.md)
+  - [SSH key 复用 1Password](~/.claude/memory/feedback/key_management.md)
+
+- **Next session 起点**(从这里接):
+  1. **修 max_turns 语义** → 改 selfplay loop 用 `move_count < max_moves`
+  2. **缓解 game 不结束**:max_moves=60 强 truncate + 检查 reward shaping 是否需要 (按 score 增量给中间奖励)
+  3. 跑 50-step smoke 验证 train loss 真的下降 + tensorboard 看曲线
+  4. 写 evaluation script: latest.pt vs random baseline N 局胜率
+  5. Phase 2 接 ai_agent.py 加载 checkpoint + MCTS 推理 → web UI 可玩
 
 ## Reference Repos
 
