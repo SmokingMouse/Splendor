@@ -7,6 +7,33 @@ session 2 后,Mac 端 algo 验证 minimum bar 通过,接力 Windows GPU 跑长�
 - Tailscale 在线: `ssh smokingmouse@windows` 通(走 100.105.89.46:22 Windows native sshd)
 - WSL Ubuntu 22.04 + RTX 4080 + CUDA 12.6 + Python 3.11 + uv
 
+### 一次性的 persistence setup(WSL2 + 长训练必做)
+
+WSL2 默认在 SSH 退出后 ~60s 内 idle-shutdown distro,且 systemd-logind 会 reap 所有 user processes(连 tmux server 都活不下来)。Long training 必须做两件事:
+
+1. **Enable linger**(让 user@1000.service 在 logout 后存活):
+   ```bash
+   ssh smokingmouse@windows wsl bash -lc "sudo loginctl enable-linger smokingmouse"
+   ```
+
+2. **Disable distro idle shutdown**(`C:\Users\smokingmouse\.wslconfig`):
+   ```
+   [wsl2]
+   memory=24GB
+   swap=8GB
+   vmIdleTimeout=-1
+   guiApplications=true
+   networkingMode=mirrored
+   ```
+   改完 `wsl --shutdown` 一次生效。
+
+3. **用 `systemd-run --user`**(不是 nohup,不是 tmux)启动 long task — 自动放进 linger 保护的 user@1000.service cgroup,SSH 断开后 + WSL 不退出时持久:
+   ```bash
+   systemd-run --user --unit=mytask \
+     --setenv=PATH=/home/smokingmouse/.local/bin:/usr/local/bin:/usr/bin:/bin \
+     bash -c "<command>"
+   ```
+
 ## 1. 拉最新代码
 
 ```bash
@@ -17,35 +44,73 @@ ssh smokingmouse@windows wsl bash -lc "cd /home/smokingmouse/python/ai/Splendor 
 
 > 单局自然结束 ~120 moves,heuristic 平均 116。3000 步训练在 RTX 4080 上预计 4-6 小时。
 
+把下面的脚本 scp 到 Windows 然后跑(SSH 转义太脆弱,用脚本):
+
 ```bash
-ssh smokingmouse@windows wsl bash -lc "cd /home/smokingmouse/python/ai/Splendor/backend && \
-  nohup uv run python -m src.train.splendor_training \
-    --total-steps 3000 \
-    --selfplay-every 100 \
-    --selfplay-games 8 \
-    --mcts-sims 50 \
-    --max-moves 150 \
-    --temperature-moves 16 \
-    --batch-size 64 \
-    --buffer-size 20000 \
-    --checkpoint-every 200 \
-    --device cuda \
-    --hidden-dim 256 \
-    --num-blocks 4 \
-    --seed 42 \
-    > /home/smokingmouse/python/ai/Splendor/artifacts/train.log 2>&1 &"
+# Mac side: create the launch script
+cat > /tmp/launch_splendor.sh <<'EOF'
+#!/bin/bash
+set -e
+export PATH="/home/smokingmouse/.local/bin:$PATH"
+cd /home/smokingmouse/python/ai/Splendor
+systemctl --user stop splendor-train.service 2>/dev/null || true
+rm -rf artifacts/checkpoints/* artifacts/tensorboard/* 2>/dev/null
+mkdir -p artifacts/logs
+systemd-run --user \
+  --unit=splendor-train \
+  --description="Splendor AlphaZero 3000-step training" \
+  --working-directory=/home/smokingmouse/python/ai/Splendor/backend \
+  --setenv=PATH=/home/smokingmouse/.local/bin:/usr/local/bin:/usr/bin:/bin \
+  --setenv=PYTHONUNBUFFERED=1 \
+  bash -c "exec >/home/smokingmouse/python/ai/Splendor/artifacts/logs/train.log 2>&1; \
+    uv run python -u -m src.train.splendor_training \
+      --total-steps 3000 --selfplay-every 100 --selfplay-games 8 --mcts-sims 50 \
+      --max-moves 150 --temperature-moves 16 --batch-size 64 --buffer-size 20000 \
+      --checkpoint-every 200 --device cuda --hidden-dim 256 --num-blocks 4 --seed 42"
+sleep 5 && systemctl --user is-active splendor-train && pgrep -fa splendor_training
+EOF
+
+# Push and run
+scp /tmp/launch_splendor.sh smokingmouse@windows:Downloads/
+ssh smokingmouse@windows wsl bash /mnt/c/Users/smokingmouse/Downloads/launch_splendor.sh
+```
+
+**监控**:
+```bash
+ssh smokingmouse@windows wsl bash -lc "tail -f /home/smokingmouse/python/ai/Splendor/artifacts/logs/train.log"
+```
+
+**停止**:
+```bash
+ssh smokingmouse@windows wsl bash -lc "systemctl --user stop splendor-train.service"
 ```
 
 ## 3. TensorBoard 端口转发
 
-```bash
-# Windows: start tensorboard
-ssh smokingmouse@windows wsl bash -lc "cd /home/smokingmouse/python/ai/Splendor && \
-  nohup uv run --project backend tensorboard --logdir artifacts/tensorboard --port 6006 --bind_all \
-    > /tmp/tb.log 2>&1 &"
+> ⚠️ tensorboard 2.20.x 需要 `pkg_resources`,setuptools 81+ 删了它 — `pyproject.toml` 已 pin `setuptools<81`,sync 后即可。
 
-# Mac: forward port
-ssh -L 6006:localhost:6006 smokingmouse@windows  # keep open, browse http://localhost:6006
+```bash
+# Mac side
+cat > /tmp/launch_tb.sh <<'EOF'
+#!/bin/bash
+export PATH="/home/smokingmouse/.local/bin:$PATH"
+systemctl --user stop splendor-tb.service 2>/dev/null || true
+systemd-run --user \
+  --unit=splendor-tb \
+  --description="Splendor TensorBoard on :6006" \
+  --working-directory=/home/smokingmouse/python/ai/Splendor \
+  --setenv=PATH=/home/smokingmouse/.local/bin:/usr/local/bin:/usr/bin:/bin \
+  --setenv=PYTHONUNBUFFERED=1 \
+  bash -c "exec >/home/smokingmouse/python/ai/Splendor/artifacts/logs/tb.log 2>&1; \
+    uv run --project backend tensorboard --logdir artifacts/tensorboard --port 6006 --bind_all"
+sleep 4 && systemctl --user is-active splendor-tb
+EOF
+
+scp /tmp/launch_tb.sh smokingmouse@windows:Downloads/
+ssh smokingmouse@windows wsl bash /mnt/c/Users/smokingmouse/Downloads/launch_tb.sh
+
+# Mac: forward port (keep this open while watching curves)
+ssh -L 6006:localhost:6006 smokingmouse@windows  # browse http://localhost:6006
 ```
 
 观察的核心曲线:
