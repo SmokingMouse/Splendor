@@ -28,6 +28,7 @@ class TrainingConfig:
     mcts_sims: int = 25
     max_moves: int = 150
     temperature_moves: int = 16
+    heuristic_mix_rate: float = 0.0
     batch_size: int = 32
     lr: float = 1e-3
     weight_decay: float = 1e-4
@@ -106,6 +107,7 @@ def run_training(cfg: TrainingConfig) -> dict:
                 temperature_moves=cfg.temperature_moves,
                 base_seed=selfplay_seed_counter,
                 device=device,
+                heuristic_mix_rate=cfg.heuristic_mix_rate,
             )
             sp_seconds = time.time() - t0
             selfplay_seed_counter += cfg.selfplay_games
@@ -216,6 +218,8 @@ def _parse_args(argv: list[str] | None = None) -> TrainingConfig:
     parser.add_argument("--mcts-sims", type=int, default=cfg.mcts_sims)
     parser.add_argument("--max-moves", type=int, default=cfg.max_moves)
     parser.add_argument("--temperature-moves", type=int, default=cfg.temperature_moves)
+    parser.add_argument("--heuristic-mix-rate", type=float, default=cfg.heuristic_mix_rate,
+                        help="0.0=pure self-play, 0.5=half games mix heuristic opponents (v3 anchor)")
     parser.add_argument("--batch-size", type=int, default=cfg.batch_size)
     parser.add_argument("--lr", type=float, default=cfg.lr)
     parser.add_argument("--weight-decay", type=float, default=cfg.weight_decay)
@@ -236,6 +240,7 @@ def _parse_args(argv: list[str] | None = None) -> TrainingConfig:
         mcts_sims=args.mcts_sims,
         max_moves=args.max_moves,
         temperature_moves=args.temperature_moves,
+        heuristic_mix_rate=args.heuristic_mix_rate,
         batch_size=args.batch_size,
         lr=args.lr,
         weight_decay=args.weight_decay,
