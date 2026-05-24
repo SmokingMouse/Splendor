@@ -105,11 +105,7 @@ Windows (WSL2 Ubuntu 22.04 /home/smokingmouse/python/ai/Splendor)
   | Win-rate > heuristic | ⏳ 需 Windows GPU 长训练 |
 
 - **Next session 起点 (Windows GPU)**:
-  1. `git pull` 拿 hybrid value + bug fix
-  2. `uv run python -m src.train.splendor_training --total-steps 3000 --selfplay-every 100 --selfplay-games 8 --mcts-sims 50 --max-moves 150 --batch-size 64 --buffer-size 20000 --checkpoint-every 200 --device cuda --hidden-dim 256 --num-blocks 4`
-  3. tensorboard 在 WSL 启动,Mac `ssh -L 6006:localhost:6006 windows`
-  4. 训完跑 `python -m scripts.self_improvement_curve --ckpt-dir artifacts/checkpoints --games 24 --mcts-sims 25`
-  5. 跑 `python -m src.train.splendor_evaluate --ckpt-a artifacts/checkpoints/latest.pt --opponent heuristic --games 24 --mcts-sims 25` 验证是否追上 heuristic
+  详见 [windows_training_sop.md](windows_training_sop.md) — 含 pull / 启动训练 / TensorBoard 转发 / 三道关评估 / failure modes 排障
 
 ### Session 1 (2026-05-24, ~7h)
 
