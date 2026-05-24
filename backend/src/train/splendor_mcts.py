@@ -33,6 +33,18 @@ def _player_index(state: MatchState, player_id: str) -> int:
     return 0
 
 
+def _reshuffle_hidden_deck(state: MatchState) -> None:
+    """Shuffle the unseen portion of each tier's deck. Visible markets and any
+    reserved cards in players' hands stay put (those are public info). This is
+    the minimum determinization to prevent NN learning to peek via
+    reserve_deck."""
+    rng = np.random.default_rng()
+    for tier, deck in state.board.decks.items():
+        if len(deck) > 1:
+            indices = rng.permutation(len(deck))
+            state.board.decks[tier] = [deck[i] for i in indices]
+
+
 def _is_terminal(state: MatchState) -> bool:
     return state.status == "finished" or check_victory(state) is not None
 
@@ -151,8 +163,14 @@ class DeterminizedMCTS:
             )
 
     def run(self, state: MatchState, iterations: int, add_dirichlet: bool = True) -> tuple[MCTSNode, np.ndarray]:
+        # Re-shuffle hidden deck portion at the root so NN can't learn to peek
+        # via reserve_deck. Without this, MCTS sees the real (visible to engine)
+        # deck order and develops cheat-strategies (Session 2 v1: NN learned to
+        # reserve tier-3 every turn → 0% vs heuristic).
+        root_state = deepcopy(state)
+        _reshuffle_hidden_deck(root_state)
         root = MCTSNode(
-            state=deepcopy(state),
+            state=root_state,
             perspective_idx=_player_index(state, state.current_player_id),
             is_terminal=_is_terminal(state),
         )
