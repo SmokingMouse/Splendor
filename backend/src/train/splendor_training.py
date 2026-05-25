@@ -41,6 +41,9 @@ class TrainingConfig:
     resume: Optional[str] = None
     hidden_dim: int = 256
     num_blocks: int = 2
+    eval_every: int = 0  # 0 = no in-training eval; e.g. 500 = eval vs heuristic every 500 steps
+    eval_games: int = 8  # games per in-training eval batch
+    eval_mcts_sims: int = 25  # MCTS sims at eval time (kept smaller to limit eval cost)
 
 
 def _build_network(cfg: TrainingConfig, device: str) -> SplendorPVNet:
@@ -199,6 +202,42 @@ def run_training(cfg: TrainingConfig) -> dict:
             )
             print(f"[step {step + 1:6d}] saved checkpoint → {ckpt_path.name} + latest.pt")
 
+        if cfg.eval_every > 0 and (step + 1) % cfg.eval_every == 0:
+            # In-training eval vs heuristic baseline. Logs win_rate + score to TB.
+            # Cheap (8 games × small MCTS); keeps eye on real strength trajectory.
+            from .splendor_agents import HeuristicAgent, MCTSAgent
+            from .splendor_evaluate import evaluate
+
+            network.eval()
+            t_eval = time.time()
+            eval_agent = MCTSAgent(
+                network=network,
+                device=device,
+                mcts_iterations=cfg.eval_mcts_sims,
+                temperature=0.0,
+                add_dirichlet=False,
+                name="train_eval",
+            )
+            opponents = [HeuristicAgent() for _ in range(3)]
+            eval_result = evaluate(
+                agent_a=eval_agent,
+                opponents=opponents,
+                games=cfg.eval_games,
+                max_moves=cfg.max_moves,
+                base_seed=10_000_000 + (step + 1),
+            )
+            eval_seconds = time.time() - t_eval
+            writer.add_scalar("eval/win_rate_vs_heuristic", eval_result.win_rate, step + 1)
+            writer.add_scalar("eval/a_score_mean", eval_result.a_score_mean, step + 1)
+            writer.add_scalar("eval/opp_score_mean", eval_result.opp_score_mean, step + 1)
+            writer.add_scalar("eval/wall_seconds", eval_seconds, step + 1)
+            print(
+                f"[step {step + 1:6d}] eval vs heuristic: "
+                f"win_rate={eval_result.win_rate:.1%}  "
+                f"score A={eval_result.a_score_mean:.2f} opp={eval_result.opp_score_mean:.2f}  "
+                f"({eval_seconds:.0f}s)"
+            )
+
     writer.close()
     return {
         "final_step": metrics_summary["steps"],
@@ -232,6 +271,9 @@ def _parse_args(argv: list[str] | None = None) -> TrainingConfig:
     parser.add_argument("--resume", type=str, default=cfg.resume)
     parser.add_argument("--hidden-dim", type=int, default=cfg.hidden_dim)
     parser.add_argument("--num-blocks", type=int, default=cfg.num_blocks)
+    parser.add_argument("--eval-every", type=int, default=cfg.eval_every)
+    parser.add_argument("--eval-games", type=int, default=cfg.eval_games)
+    parser.add_argument("--eval-mcts-sims", type=int, default=cfg.eval_mcts_sims)
     args = parser.parse_args(argv)
     return TrainingConfig(
         total_steps=args.total_steps,
@@ -253,6 +295,9 @@ def _parse_args(argv: list[str] | None = None) -> TrainingConfig:
         resume=args.resume,
         hidden_dim=args.hidden_dim,
         num_blocks=args.num_blocks,
+        eval_every=args.eval_every,
+        eval_games=args.eval_games,
+        eval_mcts_sims=args.eval_mcts_sims,
     )
 
 
