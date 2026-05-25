@@ -1,6 +1,31 @@
 # Splendor AI Progress
 
-## Current Focus
+## Current Focus (Session 5 fresh start)
+
+**已撞墙,正在 pivot**。Sessions 1-4 完成完整 AlphaZero 训练 + 验证 + 部署 pipeline,但 5+ 轮 GPU 训练 (v1-v6) **都无法稳定 beat 简单 greedy heuristic**。Best ckpt (warmstart) win rate vs heuristic ~3-6% (noise around 5%)。**离"战胜顶尖选手"目标差距大**。
+
+**核心 finding** (省得下次重蹈覆辙):
+1. 4 人 Splendor pure self-play AlphaZero **systematically collapse 到 NN-equilibrium** (NN 不买卡)。任何 RL fine-tune 从 warmstart 出发都会迅速 degrade 回 0% win。
+2. Supervised warmstart 是当前 compute regime 最强方法,但本质是 mimicry,上限 = heuristic 强度。
+3. 我们的 heuristic 太简单 (greedy priority),mimicking 它也只能弱 match heuristic。
+4. **缺少 stronger expert data source** 是真瓶颈,不是算法或 compute。
+
+**当前部署状态**:
+- `artifacts/checkpoints/latest.pt` = warmstart (50-epoch SL, ~5% vs heuristic)
+- Web UI 玩家选 `alphazero-latest` 即可玩到这个 NN(虽然弱)
+- 完整 SOP / scripts / eval harness / 直连 WSL2 都 working
+
+**Session 5 主要选项**(等用户 clear context 后决定):
+- **C (推荐)**: 找 GitHub 上 stronger Splendor AI 开源实现 → distillation 替代我们的 weak heuristic
+- B: 大幅扩容 (~24h GPU,but no theory reason it'd break the equilibrium)
+- D: 手写 stronger heuristic (look at noble req / card chains / opp resources)
+- E: 完全换算法 (Decision Transformer / offline RL / league play)
+
+详见下文 **Path C onwards** 节。
+
+---
+
+## Original Focus (Sessions 1-4)
 
 把 2 月份 codex 搭好但**算法弱、runner 是 mock** 的脚手架升级为**完整可用的 AlphaZero 训练管线**:
 
@@ -48,16 +73,13 @@ Windows (WSL2 Ubuntu 22.04 /home/smokingmouse/python/ai/Splendor)
 
 ### Mid-term (1-2 周)
 
-- [x] **Windows GPU 长训练**: v1/v2/v3 三轮完成,best ckpt = v3 step 1000 (A=4.44 vs heuristic 10.46, 0% win rate)
-- [x] 实现 evaluation: checkpoint vs random / heuristic baseline 胜率
-- [x] AI agent 升级: 读 PyTorch checkpoint + 推理时跑 MCTS (eval temperature=0)
-- [x] best ckpt → web UI 可玩 (alphazero-latest config)
-- [ ] **要 break 0% win rate vs heuristic,需选一条路** (currently blocking):
-  - Path A: **Heuristic supervised warm-start** (AlphaStar 路数)。Generate 5-10K (obs, heuristic_action) tuples → SL 1 epoch → 切 self-play。最直接,~30-60 min Mac CPU pre-train + 4-6h GPU RL。
-  - Path B: **大幅扩容**(512-hidden 6-block, 200 MCTS sims, 10000+ steps, 较小 buffer 5000)→ ~24h+ GPU。compute-heavy 但更"纯"。
-  - Path C: **ISMCTS** (information-set MCTS,根治 hidden info 偏差)。需要重写 MCTS expand/rollout,工程量大。
-- [ ] **TensorBoard 端口转发**: WSL 启 tensorboard,Mac `ssh -L 6006:localhost:6006` 浏览器看曲线 (没做完)
-- [ ] **Self-improvement curve 跨 v1/v2/v3 best ckpt**: 用 `scripts/self_improvement_curve.py` 比较 (主要看 v3 是否 dominates v1/v2)
+- [x] **Windows GPU 长训练 6 轮 (v1-v6)** 全部完成 — see Session Log
+- [x] 实现 evaluation harness (random/heuristic/ckpt baselines)
+- [x] AI agent 升级: 读 PyTorch checkpoint + 推理 MCTS
+- [x] best ckpt → web UI 可玩 (`alphazero-latest` config = warmstart NN)
+- [x] **Warmstart Path A**: SL 训出 ~5% win vs heuristic NN
+- [x] **Expert Iteration attempt**: MCTS@100 amp 也 0% win,启动不了
+- [ ] **Session 6 pivot 选 Path C/B/D/E** (见 Current Focus)
 
 ### Long-term (1+ 月)
 
@@ -68,7 +90,86 @@ Windows (WSL2 Ubuntu 22.04 /home/smokingmouse/python/ai/Splendor)
 - [ ] (可选) League/PSRO 训练多样化对手
 - [ ] 把 in-memory training repo 升级为 SQLite (避免重启丢 project/run 元数据)
 
+## Session 6 起手指南 (clear context 后第一件事)
+
+**Read order**:
+1. 本 README.md 的 **Current Focus** 节 (你正在读)
+2. 本 README.md **Session 5 + Session 4** 详细记录 (避免重蹈覆辙)
+3. [decisions.md](decisions.md) 看历史 14 条架构决策的 why
+4. [windows_training_sop.md](windows_training_sop.md) 看怎么直连 WSL2 + 起训练
+
+**当前可用 infrastructure (不用重做)**:
+- ✅ Mac 直连 WSL2 ssh:2222 (192.168.10.153) — 走 NAT mode + Win portproxy + UFW + Mac bg keepalive
+- ✅ Backend 训练 pipeline (`backend/src/train/`): selfplay / mcts / network / training / agents / evaluate
+- ✅ Backend scripts: `diag_selfplay.py` / `generate_warmstart_data.py` / `pretrain_warmstart.py` / `generate_amplified_data.py` / `self_improvement_curve.py`
+- ✅ Web UI 集成 (`backend/src/engine/ai_agent.py`) 自动 load `artifacts/checkpoints/latest.pt`
+- ✅ Eval harness mixed-seating (`splendor_evaluate.py`) — 4-player rotation,reliable
+- ✅ Heuristic agent (`splendor_agents.py:HeuristicAgent`) — greedy buy>reserve>take
+
+**已 commit + push 的 5 个 fixes 不要回退**:
+1. `_buy_card_actions` 加 affordability check (避免 game silently stall)
+2. Tie-aware ranking value (truncation 时 0 分 ties 拿平均 value 而非 player-order noise)
+3. Hybrid value scheme (terminal ranking + truncated score-based)
+4. `_reshuffle_hidden_deck` at MCTS root (防 deck-peek cheat)
+5. `num_blocks` saved in checkpoint config (load 时 mismatch 防止)
+6. `CARD_BUY_BONUS=0.03` per card (dense shaping — 已证明对 RL 不够,但 SL 不影响)
+
+**不要重做的失败 paths** (浪费过 6 轮 GPU + 多次 Mac SL):
+- ❌ Pure self-play RL (v1/v2/v3): 全 collapse 到 NN-equilibrium
+- ❌ RL fine-tune from warmstart (v4/v5/v6): 100-1500 step 内 degrade warmstart 6% → 0%
+- ❌ Expert Iteration from warmstart (MCTS@100): 0/20 wins,起不动
+- ❌ Buy_card dense shaping: 救不了 RL collapse
+- ❌ heuristic_mix_rate 0.3 / 0.5 / 0.7: 都不行
+
+**推荐 Session 6 第一动作**:
+1. WebSearch / GitHub search: "splendor MCTS python", "splendor AI", "splendor alphazero"
+2. 看找到的开源实现 vs 我们的 heuristic 强度对比 (我们的 evaluator harness 直接能用)
+3. 如果找到强的 → replace HeuristicAgent in generate_warmstart_data → retrain 一次 SL → 期望直接 > 我们当前 5% ceiling
+4. 如果没找到 → 看用户是否愿意走 Path D (手写 stronger heuristic) 或 B (盲扩容)
+
+**已知 gotchas 不要再踩**:
+- WSL git pull 不通 (GnuTLS+proxy bug) — 改动直接 scp 到 WSL,不要 ssh wsl git pull
+- WSL2 长任务不能用 nohup/tmux/systemd-run — 必须 Mac SSH 直连 WSL sshd:2222
+- setuptools 必须 < 81 (tensorboard 需要 deprecated pkg_resources)
+- 不要用 `===` 作 echo separator (zsh 解析问题)
+- Eval ground truth 不可靠到 16 games 以下 (variance ±10%)
+
+---
+
 ## Session Log
+
+### Session 5 (2026-05-25, ~4h) — v6 long-run + Expert Iteration attempt, 全员撞墙
+
+- **Done — Eval callback + dense buy_card shaping**:
+  - `splendor_features.py` 加 `CARD_BUY_BONUS=0.03` per card owned at game end → 想破 "no one buys" equilibrium
+  - `splendor_training.py` 加 `--eval-every/--eval-games/--eval-mcts-sims`,自动每 N step eval vs heuristic 写 TB,避免手动 pull ckpt 评估
+  - 提交在 commit `bc8cc73`
+
+- **Done — v6 long-run (8000 step) with kill criterion methodology**:
+  - 修正 methodology: 不再凭单点 eval kill,需连续 3 个 eval < warmstart baseline (5%) 才 kill
+  - v6 配置: resume warmstart, mix=0.5, lr=5e-4, buy_card shaping, eval_every=500
+  - Eval 轨迹: step 500 A=2.33 → step 1000 A=0.42 → step 1500 A=1.08 (全 0% win)
+  - **Kill at step 1500** (3 consecutive < 5%)
+  - 结论: shaping 也无效,RL self-play 必定 destroy warmstart in our setup
+
+- **Done — Expert Iteration attempt (Path A v2)**:
+  - 写 `scripts/generate_amplified_data.py`: warmstart + MCTS@N vs 3 heuristic 收集 amplified policies
+  - 思路: MCTS@200 应该比 raw NN 强,能产生 winning data 作为新一代 SL 标签
+  - **实测 warmstart + MCTS@100 vs 3 heuristic: 0/20 wins** (与之前 5% 评估在 noise 范围内)
+  - MCTS amplification 没产生 winning data → expert iteration 启动不了
+  - **真相**: warmstart NN 太弱,MCTS 也救不回
+
+- **诚实总结 — 当前 setup hit hard ceiling**:
+  - 6 轮 RL training (v1-v6) + Expert Iteration 都失败
+  - Best achievable: warmstart NN at ~5% win rate vs simple greedy
+  - Web UI 可玩 (casual 体验 OK),但远非"顶尖"
+  - **Root issue: 缺 stronger expert data source**。我们的 heuristic 太简单,mimicking 它无法 exceed。
+
+- **Pivot 方案** (Session 6 起点):
+  - **C (top recommended)**: 调研 GitHub 上 Splendor AI 开源实现 (search keywords: "splendor MCTS", "splendor AI", "splendor reinforcement learning"). 找到 stronger baseline 后,replace HeuristicAgent → distill 它的决策。
+  - B: 大幅扩容 (512×6, 200 sims, 10K+ steps,~24h GPU)。**但无理论理由 break 当前 equilibrium**,只是"再试一次"。
+  - D: 手写 stronger heuristic (考虑 noble requirements / card chain planning / opp resource awareness). 1-2 day 工程,可能比当前 heuristic 强但仍非"顶尖"。
+  - E: 转 algorithm (Decision Transformer offline RL / PPO+KL / league play). Research-y,不确定。
 
 ### Session 4 (2026-05-25, ~3h) — Path A: heuristic supervised warm-start
 
