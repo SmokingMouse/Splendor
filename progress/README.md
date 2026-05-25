@@ -70,6 +70,23 @@ Windows (WSL2 Ubuntu 22.04 /home/smokingmouse/python/ai/Splendor)
 
 ## Session Log
 
+### Session 4 (2026-05-25, ~3h) — Path A: heuristic supervised warm-start
+
+- **Done — Warm-start data pipeline**: `scripts/generate_warmstart_data.py` 跑 500 heuristic-vs-heuristic 局收集 58K (obs, pi_one_hot, value) tuples (Mac CPU 5s, 97% 自然结束)
+- **Done — Supervised pre-train**: `scripts/pretrain_warmstart.py` SL 训 50 epochs (Mac CPU 2.5min),val_acc 23%(random=1.67%,**14x improvement**),overfit visible after epoch 15
+- **Done — Warmstart 50-epoch eval vs heuristic**: **6.25% win rate (1/16)**, A=5.69 score. **首次 non-zero win** after v1/v2/v3 全 0%
+- **Done — RL fine-tune 尝试 (v4, v5) 全部 degraded warmstart**:
+  - v4 (lr=3e-4, mix=0.3, 2000 step → killed at 200): step 200 已经 A=2.44, 0% win
+  - v5 (lr=1e-4, mix=0.7, 1000 step → killed at 100): step 100 A=2.31, 0% win
+  - **结论**: RL self-play 在当前 setup 上**系统性破坏 supervised warmstart**(无论 lr/mix 调整)— NN policy 必然漂移到 NN-equilibrium,丢失 heuristic-mimicking 能力
+- **Done — Final deployment**: warmstart.pt → `artifacts/checkpoints/latest.pt`,web UI 玩家选 alphazero-latest 即可玩
+- **Done — mcts_sims=50 eval**: warmstart 24 games 4.17% win, A=5.04 — stable around 5% win rate
+
+- **诚实总结 — Path A 达到 ceiling**:
+  - Warmstart 是当前 setup 的最强模型 (5-6% win vs heuristic)
+  - RL fine-tune 自我对弈机制跟 supervised mimicking 互斥
+  - 要 break 5% ceiling 需要 Path B (大幅扩容) 或 Path C (ISMCTS) 或 algorithm-level rethink (PPO with KL constraint? Decision Transformer? Strong baseline distillation?)
+
 ### Session 3 (2026-05-25, ~6h) — 直连 WSL2 + GPU 长训练 v1/v2/v3
 
 - **Done — Mac 直连 WSL2 ssh 持久化方案**: 经过 nohup/setsid/tmux/linger/systemd-run 全部失败后,定位真因 = `ssh windows wsl bash` 模式下 Windows OpenSSH server 反复 reap WSL 子进程。最终方案: WSL 内启 sshd:2222 → Windows portproxy 转发 → Mac SSH 直连。需要修 5 个坑:NAT mode (mirrored 跟 Tailscale 冲突)、UFW allow 2222 (默认 INPUT DROP)、Windows firewall + portproxy、`vmIdleTimeout=-1`、Mac bg keepalive 持有 distro。详见 [windows_training_sop.md](windows_training_sop.md)。沉淀到 `~/.claude/memory/insights/remote_debug_gotchas.md`。
